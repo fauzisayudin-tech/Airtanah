@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Simulasi Lapisan Air Tanah</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            background-color: #f0f4f8;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            overflow-x: hidden;
+        }
+        canvas {
+            border-radius: 8px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+            background: #fff;
+            touch-action: none;
+        }
+        .control-panel {
+            background: rgba(255, 255, 255, 0.9);
+            backdrop-filter: blur(10px);
+        }
+        .layer-info {
+            transition: all 0.3s ease;
+        }
+    </style>
+</head>
+<body class="p-4 md:p-8">
+    <div class="max-w-5xl mx-auto">
+        <header class="mb-6 text-center">
+            <h1 class="text-3xl font-bold text-slate-800">Media Interaktif Lapisan Air Tanah</h1>
+            <p class="text-slate-600">Simulasi Infiltrasi Air Hujan ke dalam Akuifer</p>
+        </header>
+
+        <div class="grid grid-cols-1 lg:grid-cols-4 gap-6">
+            <!-- Sidebar Kontrol -->
+            <div class="lg:col-span-1 space-y-4">
+                <div class="control-panel p-4 rounded-xl shadow-sm border border-slate-200">
+                    <h2 class="font-semibold mb-3 text-slate-700">Kontrol Hujan</h2>
+                    <input type="range" id="rainIntensity" min="0" max="100" value="20" class="w-full h-2 bg-blue-200 rounded-lg appearance-none cursor-pointer">
+                    <div class="flex justify-between text-xs text-slate-500 mt-1">
+                        <span>Cerah</span>
+                        <span>Badai</span>
+                    </div>
+                    
+                    <button id="toggleRain" class="w-full mt-4 bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg transition">
+                        Mulai Hujan
+                    </button>
+                </div>
+
+                <div id="infoBox" class="layer-info p-4 rounded-xl shadow-sm border border-slate-200 bg-white min-h-[150px]">
+                    <h3 id="infoTitle" class="font-bold text-blue-800 mb-2">Petunjuk</h3>
+                    <p id="infoText" class="text-sm text-slate-600">Klik "Mulai Hujan" untuk melihat bagaimana air meresap ke dalam tanah. Arahkan kursor ke lapisan tanah untuk detail.</p>
+                </div>
+            </div>
+
+            <!-- Area Simulasi -->
+            <div class="lg:col-span-3 relative">
+                <canvas id="simCanvas" class="w-full h-auto"></canvas>
+                <div class="absolute top-4 right-4 bg-white/80 p-2 rounded text-xs border border-slate-300">
+                    <div class="flex items-center gap-2 mb-1">
+                        <span class="w-3 h-3 bg-blue-400 rounded-full"></span> Air Hujan/Infiltrasi
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <span class="w-3 h-3 bg-blue-600 rounded-full"></span> Saturasi Air Tanah
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <footer class="mt-8 text-center text-slate-500 text-sm">
+            <p>Lapisan: Permeabel → Freatis → Impermeable → Artesis → Impermeable</p>
+        </footer>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('simCanvas');
+        const ctx = canvas.getContext('2d');
+        const rainSlider = document.getElementById('rainIntensity');
+        const toggleBtn = document.getElementById('toggleRain');
+        const infoTitle = document.getElementById('infoTitle');
+        const infoText = document.getElementById('infoText');
+
+        // Setup Canvas Size
+        function resize() {
+            canvas.width = 800;
+            canvas.height = 600;
+        }
+        resize();
+
+        let isRaining = false;
+        let particles = [];
+        let clouds = [];
+        let waterLevels = { freatis: 0, artesis: 0 };
+
+        const layers = [
+            { id: 'permeabel', name: 'Lapisan Permeabel', color: '#D2B48C', yStart: 100, yEnd: 200, desc: 'Lapisan permukaan yang mudah dilewati air (pasir, kerikil). Di sinilah proses infiltrasi dimulai.' },
+            { id: 'freatis', name: 'Akuifer Bebas (Freatis)', color: '#C2B280', yStart: 200, yEnd: 320, desc: 'Lapisan jenuh air pertama. Permukaan atasnya disebut muka air tanah. Biasanya digunakan untuk sumur gali.' },
+            { id: 'impermeable1', name: 'Lapisan Kedap (Impermeable)', color: '#808080', yStart: 320, yEnd: 380, desc: 'Lapisan tanah liat atau batu padat yang sangat sulit ditembus air. Memisahkan akuifer atas dan bawah.' },
+            { id: 'artesis', name: 'Akuifer Tertekan (Artesis)', color: '#B0C4DE', yStart: 380, yEnd: 500, desc: 'Akuifer yang berada di antara dua lapisan kedap. Air di sini memiliki tekanan tinggi karena terjebak.' },
+            { id: 'impermeable2', name: 'Lapisan Kedap Bawah', color: '#696969', yStart: 500, yEnd: 600, desc: 'Lapisan dasar yang menghentikan aliran air lebih dalam lagi ke pusat bumi.' }
+        ];
+
+        // Inisialisasi Awan
+        function initClouds() {
+            clouds = [];
+            for (let i = 0; i < 5; i++) {
+                clouds.push({
+                    x: Math.random() * canvas.width,
+                    y: 20 + Math.random() * 40,
+                    size: 30 + Math.random() * 40,
+                    speed: 0.2 + Math.random() * 0.5
+                });
+            }
+        }
+        initClouds();
+
+        class Particle {
+            constructor(x, y, isRain = true) {
+                this.x = x;
+                this.y = y;
+                this.speed = 1 + Math.random() * 2;
+                this.radius = isRain ? 2 : 1.5;
+                this.opacity = 1;
+                this.isRain = isRain;
+                this.state = 'falling'; // falling, infiltrating, saturated
+            }
+
+            update() {
+                if (this.state === 'falling') {
+                    this.y += this.speed * 3;
+                    if (this.y >= layers[0].yStart) this.state = 'infiltrating';
+                } else if (this.state === 'infiltrating') {
+                    this.y += this.speed * 0.5;
+                    this.x += (Math.random() - 0.5) * 1; // Pergerakan zig-zag di pori tanah
+                    
+                    // Logika melewati lapisan kedap (sangat lambat atau macet)
+                    if (this.y >= layers[2].yStart && this.y < layers[2].yEnd) {
+                        this.y += this.speed * 0.05;
+                    }
+
+                    // Mengisi akuifer freatis
+                    if (this.y > layers[1].yStart && this.y < layers[2].yStart) {
+                        if (Math.random() > 0.98) this.state = 'saturated';
+                    }
+                    
+                    // Mengisi akuifer artesis (melalui celah simulasi)
+                    if (this.y > layers[3].yStart && this.y < layers[4].yStart) {
+                        if (Math.random() > 0.95) this.state = 'saturated';
+                    }
+                }
+
+                if (this.y > canvas.height) return false;
+                return true;
+            }
+
+            draw() {
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                ctx.fillStyle = this.state === 'falling' ? '#60A5FA' : '#2563EB';
+                ctx.fill();
+            }
+        }
+
+        toggleBtn.addEventListener('click', () => {
+            isRaining = !isRaining;
+            toggleBtn.textContent = isRaining ? 'Hentikan Hujan' : 'Mulai Hujan';
+            toggleBtn.classList.toggle('bg-red-600', isRaining);
+            toggleBtn.classList.toggle('bg-blue-600', !isRaining);
+        });
+
+        canvas.addEventListener('mousemove', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            const mouseY = (e.clientY - rect.top) * (canvas.height / rect.height);
+            
+            const hoveredLayer = layers.find(l => mouseY >= l.yStart && mouseY <= l.yEnd);
+            if (hoveredLayer) {
+                infoTitle.textContent = hoveredLayer.name;
+                infoText.textContent = hoveredLayer.desc;
+                infoTitle.style.color = hoveredLayer.color === '#808080' ? '#444' : hoveredLayer.color;
+            }
+        });
+
+        function drawClouds() {
+            clouds.forEach(cloud => {
+                // Update posisi
+                cloud.x += cloud.speed;
+                if (cloud.x > canvas.width + 100) cloud.x = -100;
+
+                // Warna awan (berubah jika hujan)
+                ctx.fillStyle = isRaining ? '#94a3b8' : '#ffffff';
+                
+                // Gambar bentuk awan sederhana (kumpulan lingkaran)
+                ctx.beginPath();
+                ctx.arc(cloud.x, cloud.y, cloud.size * 0.5, 0, Math.PI * 2);
+                ctx.arc(cloud.x + cloud.size * 0.4, cloud.y - cloud.size * 0.2, cloud.size * 0.4, 0, Math.PI * 2);
+                ctx.arc(cloud.x + cloud.size * 0.8, cloud.y, cloud.size * 0.5, 0, Math.PI * 2);
+                ctx.arc(cloud.x + cloud.size * 0.4, cloud.y + cloud.size * 0.2, cloud.size * 0.4, 0, Math.PI * 2);
+                ctx.fill();
+            });
+        }
+
+        function drawEnvironment() {
+            // Langit (warna berubah saat hujan)
+            ctx.fillStyle = isRaining ? '#cbd5e1' : '#E0F2FE';
+            ctx.fillRect(0, 0, canvas.width, 100);
+
+            drawClouds();
+
+            // Lapisan-lapisan
+            layers.forEach(layer => {
+                ctx.fillStyle = layer.color;
+                ctx.fillRect(0, layer.yStart, canvas.width, layer.yEnd - layer.yStart);
+                
+                // Tekstur tanah (noise sederhana)
+                ctx.fillStyle = 'rgba(0,0,0,0.05)';
+                for(let i=0; i<10; i++) {
+                    ctx.fillRect(Math.random()*canvas.width, layer.yStart + Math.random()*(layer.yEnd-layer.yStart), 2, 2);
+                }
+
+                // Label Lapisan
+                ctx.fillStyle = 'rgba(255,255,255,0.7)';
+                ctx.font = 'bold 14px Arial';
+                ctx.fillText(layer.name.toUpperCase(), 20, layer.yStart + 25);
+            });
+
+            // Efek Saturasi Air (Freatis)
+            if (waterLevels.freatis > 0) {
+                ctx.fillStyle = 'rgba(37, 99, 235, 0.3)';
+                let h = Math.min(waterLevels.freatis, layers[1].yEnd - layers[1].yStart);
+                ctx.fillRect(0, layers[1].yEnd - h, canvas.width, h);
+            }
+
+            // Efek Saturasi Air (Artesis)
+            if (waterLevels.artesis > 0) {
+                ctx.fillStyle = 'rgba(30, 58, 138, 0.4)';
+                let h = Math.min(waterLevels.artesis, layers[3].yEnd - layers[3].yStart);
+                ctx.fillRect(0, layers[3].yEnd - h, canvas.width, h);
+            }
+
+            // Gambar Sumur
+            drawWell(200, layers[1].yStart - 20, layers[1].yEnd - 20, "Sumur Freatis");
+            drawWell(600, layers[1].yStart - 20, layers[3].yEnd - 40, "Sumur Artesis");
+        }
+
+        function drawWell(x, yTop, yBottom, label) {
+            ctx.strokeStyle = '#475569';
+            ctx.lineWidth = 4;
+            ctx.beginPath();
+            ctx.moveTo(x-10, yTop);
+            ctx.lineTo(x-10, yBottom);
+            ctx.moveTo(x+10, yTop);
+            ctx.lineTo(x+10, yBottom);
+            ctx.stroke();
+
+            // Air di dalam sumur
+            ctx.fillStyle = '#3B82F6';
+            let waterH = label.includes("Artesis") ? waterLevels.artesis * 0.8 : waterLevels.freatis * 0.9;
+            ctx.fillRect(x-8, yBottom - waterH, 16, waterH);
+
+            ctx.fillStyle = '#1e293b';
+            ctx.font = '10px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText(label, x, yTop - 10);
+            ctx.textAlign = 'start';
+        }
+
+        function update() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            drawEnvironment();
+
+            if (isRaining) {
+                const intensity = parseInt(rainSlider.value) / 10;
+                for (let i = 0; i < intensity; i++) {
+                    if (Math.random() > 0.5) {
+                        // Partikel hujan muncul dari area awan
+                        particles.push(new Particle(Math.random() * canvas.width, 20 + Math.random() * 40));
+                    }
+                }
+                // Perlahan isi akuifer saat hujan
+                waterLevels.freatis += intensity * 0.005;
+                waterLevels.artesis += intensity * 0.002;
+            } else {
+                // Air menyusut perlahan (evaporasi/aliran keluar)
+                waterLevels.freatis = Math.max(0, waterLevels.freatis - 0.01);
+                waterLevels.artesis = Math.max(0, waterLevels.artesis - 0.005);
+            }
+
+            particles = particles.filter(p => {
+                const alive = p.update();
+                if (alive) p.draw();
+                return alive && p.state !== 'saturated';
+            });
+
+            requestAnimationFrame(update);
+        }
+
+        window.onload = update;
+    </script>
+</body>
+</html>
